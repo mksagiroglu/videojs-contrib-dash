@@ -117,6 +117,42 @@ class Html5DashJS {
     this.mediaPlayer_.setProtectionData(this.keySystemOptions_);
     this.mediaPlayer_.attachSource(manifestSource);
 
+    // Video js' in duration setCurrentTime ve currentTime fonksiyonlarýnýn dash js karþýlýklarýný kullanmasý için, baþlangýç
+    this.duration = function () {
+      if (this.mediaPlayer_) {
+        try {
+          return this.mediaPlayer_.duration();
+        } catch (err) {
+          // console.log('err', err.stack);
+        }
+      }
+      return videojs.Html5.prototype.duration.call(this);
+    }
+
+    this.setCurrentTime = function (time) {
+      if (this.mediaPlayer_) {
+        try {
+          return this.mediaPlayer_.seek(time);
+        } catch (err) {
+          // console.log('err', err.stack);
+        }
+      }
+      return videojs.Html5.prototype.setCurrentTime.call(this, time);
+    }
+
+    this.currentTime = function () {
+      if (this.mediaPlayer_) {
+        try {
+          return this.mediaPlayer_.time();
+        } catch (err) {
+          // console.log('err', err.stack);
+        }
+      }
+      return videojs.Html5.prototype.currentTime.call(this);
+    }
+
+
+
     this.tech_.triggerReady();
   }
 
@@ -184,13 +220,13 @@ class Html5DashJS {
     return Html5DashJS.hooks_[type];
   }
 
-/**
- * Add a function hook to a specific dash lifecycle
- *
- * @param {string} type the lifecycle to hook the function to
- * @param {Function|Function[]} hook the function or array of functions to attach
- * @method hook
- */
+  /**
+   * Add a function hook to a specific dash lifecycle
+   *
+   * @param {string} type the lifecycle to hook the function to
+   * @param {Function|Function[]} hook the function or array of functions to attach
+   * @method hook
+   */
   static hook(type, hook) {
     Html5DashJS.hooks(type, hook);
   }
@@ -219,7 +255,7 @@ class Html5DashJS {
 
 Html5DashJS.hooks_ = {};
 
-const canHandleKeySystems = function(source) {
+const canHandleKeySystems = function (source) {
   // copy the source
   source = JSON.parse(JSON.stringify(source));
 
@@ -245,9 +281,9 @@ const canHandleKeySystems = function(source) {
   return true;
 };
 
-videojs.DashSourceHandler = function() {
+videojs.DashSourceHandler = function () {
   return {
-    canHandleSource: function(source) {
+    canHandleSource: function (source) {
       let dashExtRE = /\.mpd/i;
 
       if (!canHandleKeySystems(source)) {
@@ -263,17 +299,17 @@ videojs.DashSourceHandler = function() {
       }
     },
 
-    handleSource: function(source, tech, options) {
+    handleSource: function (source, tech, options) {
       return new Html5DashJS(source, tech, options);
     },
 
-    canPlayType: function(type) {
+    canPlayType: function (type) {
       return videojs.DashSourceHandler.canPlayType(type);
     }
   };
 };
 
-videojs.DashSourceHandler.canPlayType = function(type) {
+videojs.DashSourceHandler.canPlayType = function (type) {
   let dashTypeRE = /^application\/dash\+xml/i;
   if (dashTypeRE.test(type)) {
     return 'probably';
