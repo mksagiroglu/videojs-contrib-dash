@@ -21,7 +21,7 @@ function handlePlaybackMetadataLoaded(player, tech) {
   }
 
   function findDashAudioTrack(subDashAudioTracks, videojsAudioTrack) {
-    return subDashAudioTracks.find(({index}) =>
+    return subDashAudioTracks.filter(({index}) =>
       generateIdFromTrackIndex(index) === videojsAudioTrack.id
     );
   }
@@ -62,7 +62,7 @@ function handlePlaybackMetadataLoaded(player, tech) {
         const dashAudioTrack = findDashAudioTrack(dashAudioTracks, track);
 
         // Set is as the current track
-        mediaPlayer.setCurrentTrack(dashAudioTrack);
+        mediaPlayer.setCurrentTrack(dashAudioTrack[0] || dashAudioTrack);
 
         // Stop looping
         continue;
