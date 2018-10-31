@@ -3,6 +3,7 @@ import videojs from 'video.js';
 import dashjs from 'dashjs';
 import setupAudioTracks from './setup-audio-tracks';
 import setupTextTracks from './setup-text-tracks';
+import document from 'global/document';
 
 /**
  * videojs-contrib-dash
@@ -20,6 +21,7 @@ class Html5DashJS {
     this.tech_ = tech;
     this.el_ = tech.el();
     this.elParent_ = this.el_.parentNode;
+    this.hasFiniteDuration_ = false;
 
     // Do nothing if the src is falsey
     if (!source.src) {
@@ -42,7 +44,8 @@ class Html5DashJS {
       source = hook(source);
     });
 
-    let manifestSource = source.src;
+    const manifestSource = source.src;
+
     this.keySystemOptions_ = Html5DashJS.buildDashJSProtData(source.keySystemOptions);
 
     this.player.dash.mediaPlayer = dashjs.MediaPlayer().create();
@@ -70,6 +73,134 @@ class Html5DashJS {
     // element to bind to.
     this.mediaPlayer_.initialize();
 
+    // Retrigger a dash.js-specific error event as a player error
+    // See src/streaming/utils/ErrorHandler.js in dash.js code
+    // Handled with error (playback is stopped):
+    // - capabilityError
+    // - downloadError
+    // - manifestError
+    // - mediaSourceError
+    // - mediaKeySessionError
+    // Not handled:
+    // - timedTextError (video can still play)
+    // - mediaKeyMessageError (only fires under 'might not work' circumstances)
+    this.retriggerError_ = (event) => {
+      if (event.error === 'capability' && event.event === 'mediasource') {
+        // No support for MSE
+        this.player.error({
+          code: 4,
+          message: 'The media cannot be played because it requires a feature ' +
+            'that your browser does not support.'
+        });
+
+      } else if (event.error === 'manifestError' && (
+        // Manifest type not supported
+        (event.event.id === 'createParser') ||
+        // Codec(s) not supported
+        (event.event.id === 'codec') ||
+        // No streams available to stream
+        (event.event.id === 'nostreams') ||
+        // Error creating Stream object
+        (event.event.id === 'nostreamscomposed') ||
+        // syntax error parsing the manifest
+        (event.event.id === 'parse') ||
+        // a stream has multiplexed audio+video
+        (event.event.id === 'multiplexedrep')
+      )) {
+        // These errors have useful error messages, so we forward it on
+        this.player.error({code: 4, message: event.event.message});
+
+      } else if (event.error === 'mediasource') {
+        // This error happens when dash.js fails to allocate a SourceBuffer
+        // OR the underlying video element throws a `MediaError`.
+        // If it's a buffer allocation fail, the message states which buffer
+        // (audio/video/text) failed allocation.
+        // If it's a `MediaError`, dash.js inspects the error object for
+        // additional information to append to the error type.
+        if (event.event.match('MEDIA_ERR_ABORTED')) {
+          this.player.error({code: 1, message: event.event});
+        } else if (event.event.match('MEDIA_ERR_NETWORK')) {
+          this.player.error({code: 2, message: event.event});
+        } else if (event.event.match('MEDIA_ERR_DECODE')) {
+          this.player.error({code: 3, message: event.event});
+        } else if (event.event.match('MEDIA_ERR_SRC_NOT_SUPPORTED')) {
+          this.player.error({code: 4, message: event.event});
+        } else if (event.event.match('MEDIA_ERR_ENCRYPTED')) {
+          this.player.error({code: 5, message: event.event});
+        } else if (event.event.match('UNKNOWN')) {
+          // We shouldn't ever end up here, since this would mean a
+          // `MediaError` thrown by the video element that doesn't comply
+          // with the W3C spec. But, since we should handle the error,
+          // throwing a MEDIA_ERR_SRC_NOT_SUPPORTED is probably the
+          // most reasonable thing to do.
+          this.player.error({code: 4, message: event.event});
+        } else {
+          // Buffer allocation error
+          this.player.error({code: 4, message: event.event});
+        }
+
+      } else if (event.error === 'capability' && event.event === 'encryptedmedia') {
+        // Browser doesn't support EME
+        this.player.error({
+          code: 5,
+          message: 'The media cannot be played because it requires encryption ' +
+            'features that your browser does not support.'
+        });
+
+      } else if (event.error === 'key_session') {
+        // This block handles pretty much all errors thrown by the
+        // encryption subsystem
+        this.player.error({
+          code: 5,
+          message: event.event
+        });
+
+      } else if (event.error === 'download') {
+        this.player.error({
+          code: 2,
+          message: 'The media playback was aborted because too many consecutive ' +
+            'download errors occurred.'
+        });
+
+      } else if (event.error === 'mssError') {
+        this.player.error({
+          code: 3,
+          message: event.event
+        });
+
+      } else {
+        // ignore the error
+        return;
+      }
+
+      // only reset the dash player in 10ms async, so that the rest of the
+      // calling function finishes
+      setTimeout(() => {
+        this.mediaPlayer_.reset();
+      }, 10);
+    };
+
+    this.mediaPlayer_.on(dashjs.MediaPlayer.events.ERROR, this.retriggerError_);
+
+    this.getDuration_ = (event) => {
+      const periods = event.data.Period_asArray;
+      const oldHasFiniteDuration = this.hasFiniteDuration_;
+
+      if (event.data.mediaPresentationDuration || periods[periods.length - 1].duration) {
+        this.hasFiniteDuration_ = true;
+      } else {
+        // in case we run into a weird situation where we're VOD but then
+        // switch to live
+        this.hasFiniteDuration_ = false;
+      }
+
+      if (this.hasFiniteDuration_ !== oldHasFiniteDuration) {
+        this.player.trigger('durationchange');
+      }
+    };
+
+    this.mediaPlayer_.on(dashjs.MediaPlayer.events.MANIFEST_LOADED, this.getDuration_);
+
     // Apply all dash options that are set
     if (options.dash) {
       Object.keys(options.dash).forEach((key) => {
@@ -78,7 +209,7 @@ class Html5DashJS {
 
         if (this.mediaPlayer_.hasOwnProperty(dashOptionsKey)) {
           // Providing a key without `set` prefix is now deprecated.
-          videojs.log.warn(`Using dash options in videojs-contrib-dash without the set prefix ` +
+          videojs.log.warn('Using dash options in videojs-contrib-dash without the set prefix ' +
             `has been deprecated. Change '${key}' to '${dashOptionsKey}'`);
 
           // Set key so it will still work
@@ -163,15 +294,15 @@ class Html5DashJS {
    * Also rename 'licenseUrl' property in the options to an 'serverURL' property
    */
   static buildDashJSProtData(keySystemOptions) {
-    let output = {};
+    const output = {};
 
     if (!keySystemOptions || !Array.isArray(keySystemOptions)) {
       return null;
     }
 
     for (let i = 0; i < keySystemOptions.length; i++) {
-      let keySystem = keySystemOptions[i];
-      let options = videojs.mergeOptions({}, keySystem.options);
+      const keySystem = keySystemOptions[i];
+      const options = videojs.mergeOptions({}, keySystem.options);
 
       if (options.licenseUrl) {
         options.serverURL = options.licenseUrl;
@@ -186,6 +317,8 @@ class Html5DashJS {
 
   dispose() {
     if (this.mediaPlayer_) {
+      this.mediaPlayer_.off(dashjs.MediaPlayer.events.ERROR, this.retriggerError_);
+      this.mediaPlayer_.off(dashjs.MediaPlayer.events.MANIFEST_LOADED, this.getDuration_);
       this.mediaPlayer_.reset();
     }
 
@@ -195,11 +328,11 @@ class Html5DashJS {
   }
 
   duration() {
-    const duration = this.el_.duration;
-    if (duration === Number.MAX_VALUE) {
+    if (this.mediaPlayer_.isDynamic() && !this.hasFiniteDuration_) {
       return Infinity;
     }
-    return duration;
+    return this.mediaPlayer_.duration();
+
   }
 
   /**
@@ -270,9 +403,10 @@ const canHandleKeySystems = function (source) {
     source = hook(source);
   });
 
-  let videoEl = document.createElement('video');
+  const videoEl = document.createElement('video');
+
   if (source.keySystemOptions &&
-    !(navigator.requestMediaKeySystemAccess ||
+    !(window.navigator.requestMediaKeySystemAccess ||
       // IE11 Win 8.1
       videoEl.msSetMediaKeys)) {
     return false;
@@ -283,8 +417,8 @@ const canHandleKeySystems = function (source) {
 
 videojs.DashSourceHandler = function () {
   return {
-    canHandleSource: function (source) {
-      let dashExtRE = /\.mpd/i;
+    canHandleSource(source) {
+      const dashExtRE = /\.mpd/i;
 
       if (!canHandleKeySystems(source)) {
         return '';
@@ -294,23 +428,24 @@ videojs.DashSourceHandler = function () {
         return 'probably';
       } else if (dashExtRE.test(source.src)) {
         return 'maybe';
-      } else {
-        return '';
       }
+      return '';
+
     },
 
-    handleSource: function (source, tech, options) {
+    handleSource(source, tech, options) {
       return new Html5DashJS(source, tech, options);
     },
 
-    canPlayType: function (type) {
+    canPlayType(type) {
       return videojs.DashSourceHandler.canPlayType(type);
     }
   };
 };
 
-videojs.DashSourceHandler.canPlayType = function (type) {
-  let dashTypeRE = /^application\/dash\+xml/i;
+videojs.DashSourceHandler.canPlayType = function(type) {
+  const dashTypeRE = /^application\/dash\+xml/i;
+
   if (dashTypeRE.test(type)) {
     return 'probably';
   }
@@ -319,7 +454,7 @@ videojs.DashSourceHandler.canPlayType = function (type) {
 };
 
 // Only add the SourceHandler if the browser supports MediaSourceExtensions
-if (!!window.MediaSource) {
+if (window.MediaSource) {
   videojs.getTech('Html5').registerSourceHandler(videojs.DashSourceHandler(), 0);
 }
 

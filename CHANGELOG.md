@@ -1,10 +1,18 @@
 CHANGELOG
 =========
 
-## HEAD (Unreleased)
-_(none)_
+## 2.10.0 (2018-07-30)
+* Cleanup of event addition and removal on dispose to not bork on source change
+* Use MPD type and duration to determine if we should report live status
+* Add error handler for new `mssError` in dash.js 2.6.8
+* Pass through text track kind to dash.js
 
---------------------
+## 2.9.3 (2018-04-12)
+* Retrigger dash.js errors on video.js
+
+## 2.9.2 (2017-10-11)
+* Depend on either Video.js 5.x or 6.x
+
 ## 2.9.1 (2017-06-15)
 * Fix text tracks in IE
 

@@ -20,8 +20,8 @@ function handlePlaybackMetadataLoaded(player, tech) {
     return `dash-audio-${index}`;
   }
 
-  function findDashAudioTrack(dashAudioTracks, videojsAudioTrack) {
-    return dashAudioTracks.find(({index}) =>
+  function findDashAudioTrack(subDashAudioTracks, videojsAudioTrack) {
+    return subDashAudioTracks.find(({index}) =>
       generateIdFromTrackIndex(index) === videojsAudioTrack.id
     );
   }
@@ -48,19 +48,18 @@ function handlePlaybackMetadataLoaded(player, tech) {
         id: generateIdFromTrackIndex(dashTrack.index),
         kind: dashTrack.kind || 'main',
         label,
-        language: dashTrack.lang,
+        language: dashTrack.lang
       })
     );
   });
 
-  videojsAudioTracks.addEventListener('change', () => {
+  const audioTracksChangeHandler = () => {
     for (let i = 0; i < videojsAudioTracks.length; i++) {
       const track = videojsAudioTracks[i];
 
       if (track.enabled) {
         // Find the audio track we just selected by the id
         const dashAudioTrack = findDashAudioTrack(dashAudioTracks, track);
-
 
         // Set is as the current track
         mediaPlayer.setCurrentTrack(dashAudioTrack);
@@ -69,6 +68,11 @@ function handlePlaybackMetadataLoaded(player, tech) {
         continue;
       }
     }
+  };
+
+  videojsAudioTracks.addEventListener('change', audioTracksChangeHandler);
+  player.dash.mediaPlayer.on(dashjs.MediaPlayer.events.STREAM_TEARDOWN_COMPLETE, () => {
+    videojsAudioTracks.removeEventListener('change', audioTracksChangeHandler);
   });
 }
 
@@ -79,7 +83,7 @@ function handlePlaybackMetadataLoaded(player, tech) {
 export default function setupAudioTracks(player, tech) {
   // When `dashjs` finishes loading metadata, create audio tracks for `video.js`.
   player.dash.mediaPlayer.on(
-      dashjs.MediaPlayer.events.PLAYBACK_METADATA_LOADED,
-      handlePlaybackMetadataLoaded.bind(null, player, tech)
+    dashjs.MediaPlayer.events.PLAYBACK_METADATA_LOADED,
+    handlePlaybackMetadataLoaded.bind(null, player, tech)
   );
 }
